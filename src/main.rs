@@ -2,13 +2,12 @@
 
 extern crate futures;
 extern crate hyper;
+extern crate url;
 
 use futures::future::Future;
 
 use hyper::header::ContentLength;
 use hyper::server::{Http, Request, Response, Service};
-
-const PHRASE: &'static str = "Hello, World!";
 
 struct TurboCrab;
 
@@ -21,14 +20,17 @@ impl Service for TurboCrab {
     // resolve to. This can change to whatever Future you need.
     type Future = Box<Future<Item=Self::Response, Error=Self::Error>>;
 
-    fn call(&self, _req: Request) -> Self::Future {
-        // We're currently ignoring the Request
-        // And returning an 'ok' Future, which means it's ready
-        // immediately, and build a Response with the 'PHRASE' body.
+    fn call(&self, req: Request) -> Self::Future {
+        println!("{}", req.uri().as_ref());
+
+        let params = url::form_urlencoded::parse(req.query().unwrap_or("").as_bytes()).collect::<Vec<_>>();
+
+        let s = format!("{:?}", params);
+
         Box::new(futures::future::ok(
             Response::new()
-                .with_header(ContentLength(PHRASE.len() as u64))
-                .with_body(PHRASE)
+                .with_header(ContentLength(s.len() as u64))
+                .with_body(s)
         ))
     }
 }

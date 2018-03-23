@@ -6,3 +6,4 @@ authors = ["Jacob Haslehurst <jacob@haslehurst.net>"]
 [dependencies]
 hyper = "0.11"
 futures = "0.1"
+url = "1.0"
