@@ -9,6 +9,8 @@ use futures::future::Future;
 use hyper::header::ContentLength;
 use hyper::server::{Http, Request, Response, Service};
 
+use url::Url;
+
 struct TurboCrab;
 
 impl Service for TurboCrab {
@@ -21,12 +23,15 @@ impl Service for TurboCrab {
     type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
 
     fn call(&self, req: Request) -> Self::Future {
-        println!("{}", req.uri().as_ref());
+        let source_url: Option<Url> = req.query().and_then(|s| {
+            url::form_urlencoded::parse(s.as_bytes())
+                .find(|&(ref k, _)| k == "url")
+                .map(|(_, v)| v)
+                .and_then(|url| Url::parse(&url).ok())
+        });
 
-        let params =
-            url::form_urlencoded::parse(req.query().unwrap_or("").as_bytes()).collect::<Vec<_>>();
-
-        let s = format!("{:?}", params);
+        let s = format!("{:?}", source_url);
+        println!("{}", s);
 
         Box::new(futures::future::ok(
             Response::new()
