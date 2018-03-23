@@ -1,3 +1,5 @@
+#![feature(conservative_impl_trait)]
+
 extern crate futures;
 extern crate hyper;
 
