@@ -18,19 +18,20 @@ impl Service for TurboCrab {
     type Error = hyper::Error;
     // The future representing the eventual Response your call will
     // resolve to. This can change to whatever Future you need.
-    type Future = Box<Future<Item=Self::Response, Error=Self::Error>>;
+    type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
 
     fn call(&self, req: Request) -> Self::Future {
         println!("{}", req.uri().as_ref());
 
-        let params = url::form_urlencoded::parse(req.query().unwrap_or("").as_bytes()).collect::<Vec<_>>();
+        let params =
+            url::form_urlencoded::parse(req.query().unwrap_or("").as_bytes()).collect::<Vec<_>>();
 
         let s = format!("{:?}", params);
 
         Box::new(futures::future::ok(
             Response::new()
                 .with_header(ContentLength(s.len() as u64))
-                .with_body(s)
+                .with_body(s),
         ))
     }
 }
