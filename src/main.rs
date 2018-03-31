@@ -3,61 +3,43 @@
 // extern crate failure;
 extern crate futures;
 extern crate hyper;
-extern crate reqwest;
+extern crate hyper_tls;
 extern crate tokio_core;
 extern crate url;
 
-// use failure::Error;
+use std::str::FromStr;
+
 use futures::prelude::*;
 
 use hyper::header::ContentLength;
+use hyper::{Client, Uri};
 use hyper::server::{Http, Request, Response, Service};
 
-use reqwest::unstable::async::Client;
 use tokio_core::reactor::Core;
 
-use url::Url;
-
 struct TurboCrab {
-    client: Client,
+    client: Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>,
 }
 
 impl Service for TurboCrab {
-    // boilerplate hooking up hyper's server types
     type Request = Request;
     type Response = Response;
     type Error = hyper::Error;
-    // The future representing the eventual Response your call will
-    // resolve to. This can change to whatever Future you need.
     type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
 
     fn call(&self, req: Request) -> Self::Future {
-        let source_url: Option<Url> = req.query().and_then(|s| {
+        let source_url: Option<Uri> = req.query().and_then(|s| {
             url::form_urlencoded::parse(s.as_bytes())
                 .find(|&(ref k, _)| k == "url")
                 .map(|(_, v)| v)
-                .and_then(|url| Url::parse(&url).ok())
+                .and_then(|url| Uri::from_str(&url).ok())
         });
 
         let s = format!("{:?}", source_url);
         println!("{}", s);
 
         if let Some(source_url) = source_url {
-            Box::new(
-                self.client
-                    .get(source_url)
-                    .send()
-                    .and_then(|res| {
-                        let headers = res.headers().clone();
-
-                        res.into_body().concat2().map(|body| {
-                            Response::new()
-                                .with_headers(headers)
-                                .with_body(body.to_vec())
-                        })
-                    })
-                    .or_else(|_| Ok(Response::new())),
-            )
+            Box::new(self.client.get(source_url))
         } else {
             Box::new(futures::future::ok(
                 Response::new()
@@ -78,7 +60,9 @@ fn main() {
     let server = Http::new()
         .serve_addr_handle(&addr, &core.handle(), move || {
             Ok(TurboCrab {
-                client: Client::new(&client_handle),
+                client: Client::configure()
+                    .connector(hyper_tls::HttpsConnector::new(8, &client_handle).unwrap())
+                    .build(&client_handle),
             })
         })
         .unwrap();
