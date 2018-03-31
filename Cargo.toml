@@ -9,3 +9,4 @@ futures = "0.1"
 url = "1.0"
 reqwest = {version = "0.8", features=["unstable"]}
 tokio-core = "0.1"
+failure = "0.1"

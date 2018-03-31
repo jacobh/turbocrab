@@ -1,12 +1,13 @@
 #![feature(conservative_impl_trait)]
 
+// extern crate failure;
 extern crate futures;
 extern crate hyper;
 extern crate reqwest;
 extern crate tokio_core;
 extern crate url;
 
-// use futures::future::Future;
+// use failure::Error;
 use futures::prelude::*;
 
 use hyper::header::ContentLength;
@@ -41,11 +42,29 @@ impl Service for TurboCrab {
         let s = format!("{:?}", source_url);
         println!("{}", s);
 
-        Box::new(futures::future::ok(
-            Response::new()
-                .with_header(ContentLength(s.len() as u64))
-                .with_body(s),
-        ))
+        if let Some(source_url) = source_url {
+            Box::new(
+                self.client
+                    .get(source_url)
+                    .send()
+                    .and_then(|res| {
+                        let headers = res.headers().clone();
+
+                        res.into_body().concat2().map(|body| {
+                            Response::new()
+                                .with_headers(headers)
+                                .with_body(body.to_vec())
+                        })
+                    })
+                    .or_else(|_| Ok(Response::new())),
+            )
+        } else {
+            Box::new(futures::future::ok(
+                Response::new()
+                    .with_header(ContentLength(s.len() as u64))
+                    .with_body(s),
+            ))
+        }
     }
 }
 
