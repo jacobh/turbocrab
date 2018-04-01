@@ -1,6 +1,7 @@
 #![feature(conservative_impl_trait)]
 
 // extern crate failure;
+extern crate evmap;
 extern crate futures;
 extern crate hyper;
 extern crate hyper_tls;
@@ -9,7 +10,7 @@ extern crate url;
 
 use std::str::FromStr;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 
 use futures::prelude::*;
 
@@ -93,23 +94,28 @@ impl Into<Response> for CachedResponse {
 
 struct TurboCrab {
     client: Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>,
-    cache: Arc<RwLock<HashMap<Uri, CachedResponse>>>,
+    cache_reader: Arc<evmap::ReadHandle<Uri, Box<CachedResponse>>>,
+    cache_writer: Arc<Mutex<evmap::WriteHandle<Uri, Box<CachedResponse>>>>,
 }
 impl TurboCrab {
     fn new(client_handle: &Handle) -> TurboCrab {
+        let (reader, writer) = evmap::new();
         TurboCrab {
             client: Client::configure()
                 .connector(hyper_tls::HttpsConnector::new(8, client_handle).unwrap())
                 .build(client_handle),
-            cache: Arc::new(RwLock::new(HashMap::new())),
+            cache_reader: Arc::new(reader),
+            cache_writer: Arc::new(Mutex::new(writer)),
         }
     }
     fn get_url(&self, url: Uri) -> Box<Future<Item = Response, Error = hyper::Error> + 'static> {
-        let cache = self.cache.clone();
+        let cache_reader = self.cache_reader.clone();
 
-        if let Some(resp) = cache.read().unwrap().get(&url) {
-            return Box::new(futures::future::ok(resp.clone().into()));
+        if let Some(resp) = cache_reader.get_and(&url, |resps| resps[0].clone()) {
+            return Box::new(futures::future::ok((*resp).into()));
         }
+
+        let cache_writer = self.cache_writer.clone();
 
         Box::new(self.client.get(url.clone()).and_then(|resp| {
             let resp_builder =
@@ -120,7 +126,11 @@ impl TurboCrab {
                 .map(|chunk| chunk.to_vec())
                 .map(move |body: Vec<u8>| {
                     let cached_response = resp_builder.with_body(body).build();
-                    cache.write().unwrap().insert(url, cached_response.clone());
+                    {
+                        let mut cache_writer = cache_writer.lock().unwrap();
+                        cache_writer.insert(url, Box::new(cached_response.clone()));
+                        cache_writer.refresh()
+                    }
                     cached_response.into()
                 })
         }))
