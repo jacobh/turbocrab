@@ -98,13 +98,12 @@ impl Into<Response> for CachedResponse {
     }
 }
 
-struct TurboCrab {
-    client: Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>,
-    cache_reader: Arc<evmap::ReadHandle<Uri, Box<CachedResponse>>>,
-    cache_sender: Arc<crossbeam_channel::Sender<CachedResponse>>,
+struct TurboCache {
+    cache_reader: evmap::ReadHandle<Uri, Box<CachedResponse>>,
+    cache_sender: crossbeam_channel::Sender<CachedResponse>,
 }
-impl TurboCrab {
-    fn new(client_handle: &Handle) -> TurboCrab {
+impl TurboCache {
+    fn new() -> TurboCache {
         let (reader, mut writer) = evmap::new();
         let (tx, rx) = crossbeam_channel::unbounded::<CachedResponse>();
 
@@ -115,22 +114,38 @@ impl TurboCrab {
             }
         });
 
+        TurboCache {
+            cache_reader: reader,
+            cache_sender: tx,
+        }
+    }
+    fn get(&self, url: &Uri) -> Option<CachedResponse> {
+        self.cache_reader.get_and(url, |resps| *(resps[0].clone()))
+    }
+    fn append_async(&self, resp: CachedResponse) {
+        self.cache_sender.send(resp).unwrap()
+    }
+}
+
+struct TurboCrab {
+    client: Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>,
+    cache: Arc<TurboCache>,
+}
+impl TurboCrab {
+    fn new(client_handle: &Handle) -> TurboCrab {
         TurboCrab {
             client: Client::configure()
                 .connector(hyper_tls::HttpsConnector::new(8, client_handle).unwrap())
                 .build(client_handle),
-            cache_reader: Arc::new(reader),
-            cache_sender: Arc::new(tx),
+            cache: Arc::new(TurboCache::new()),
         }
     }
     fn get_url(&self, url: Uri) -> Box<Future<Item = Response, Error = hyper::Error> + 'static> {
-        let cache_reader = self.cache_reader.clone();
+        let cache = self.cache.clone();
 
-        if let Some(resp) = cache_reader.get_and(&url, |resps| resps[0].clone()) {
-            return Box::new(futures::future::ok((*resp).into()));
+        if let Some(resp) = cache.get(&url) {
+            return Box::new(futures::future::ok(resp.into()));
         }
-
-        let cache_sender = self.cache_sender.clone();
 
         Box::new(self.client.get(url.clone()).and_then(|resp| {
             let resp_builder =
@@ -141,7 +156,7 @@ impl TurboCrab {
                 .map(|chunk| chunk.to_vec())
                 .map(move |body: Vec<u8>| {
                     let cached_response = resp_builder.with_body(body).build();
-                    cache_sender.send(cached_response.clone()).unwrap();
+                    cache.append_async(cached_response.clone());
                     cached_response.into()
                 })
         }))
