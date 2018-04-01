@@ -13,24 +13,77 @@ use std::sync::{Arc, RwLock};
 
 use futures::prelude::*;
 
-use hyper::{Client, Uri};
+use hyper::{Client, Headers, Uri};
 use hyper::server::{Http, Request, Response, Service};
 
 use tokio_core::reactor::{Core, Handle};
 
-#[derive(Clone)]
+struct CachedResponseBuilder {
+    status: hyper::StatusCode,
+    headers: HashMap<String, Vec<Vec<u8>>>,
+    body: Vec<u8>,
+}
+impl CachedResponseBuilder {
+    fn new(status: hyper::StatusCode) -> CachedResponseBuilder {
+        CachedResponseBuilder {
+            status: status,
+            headers: HashMap::new(),
+            body: Vec::new(),
+        }
+    }
+    fn with_body(mut self, body: Vec<u8>) -> CachedResponseBuilder {
+        self.body = body;
+        self
+    }
+    fn with_headers(mut self, headers: &Headers) -> CachedResponseBuilder {
+        self.headers = {
+            headers
+                .iter()
+                .map(|header_item| {
+                    (
+                        header_item.name().to_string(),
+                        header_item
+                            .raw()
+                            .iter()
+                            .map(|raw_val| raw_val.to_vec())
+                            .collect(),
+                    )
+                })
+                .collect()
+        };
+        self
+    }
+    fn build(self) -> CachedResponse {
+        CachedResponse {
+            status: self.status,
+            headers: self.headers,
+            body: self.body,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 struct CachedResponse {
     status: hyper::StatusCode,
-    headers: hyper::Headers,
+    headers: HashMap<String, Vec<Vec<u8>>>,
     body: Vec<u8>,
+}
+impl CachedResponse {
+    fn headers(&self) -> Headers {
+        let mut h = Headers::with_capacity(10);
+        for (k, vs) in self.headers.clone() {
+            for v in vs {
+                h.append_raw(k.clone(), v);
+            }
+        }
+        h
+    }
 }
 impl Into<Response> for CachedResponse {
     fn into(self) -> Response {
-        let CachedResponse {
-            status,
-            headers,
-            body,
-        } = self;
+        let headers = self.headers();
+        let CachedResponse { status, body, .. } = self;
+
         Response::new()
             .with_status(status)
             .with_headers(headers)
@@ -59,18 +112,14 @@ impl TurboCrab {
         }
 
         Box::new(self.client.get(url.clone()).and_then(|resp| {
-            let status = resp.status();
-            let headers = resp.headers().clone();
+            let resp_builder =
+                CachedResponseBuilder::new(resp.status()).with_headers(resp.headers());
 
             resp.body()
                 .concat2()
                 .map(|chunk| chunk.to_vec())
                 .map(move |body: Vec<u8>| {
-                    let cached_response = CachedResponse {
-                        status: status,
-                        headers: headers,
-                        body: body,
-                    };
+                    let cached_response = resp_builder.with_body(body).build();
                     cache.write().unwrap().insert(url, cached_response.clone());
                     cached_response.into()
                 })
