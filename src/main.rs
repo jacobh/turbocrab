@@ -16,7 +16,7 @@ use futures::prelude::*;
 use hyper::{Client, Uri};
 use hyper::server::{Http, Request, Response, Service};
 
-use tokio_core::reactor::Core;
+use tokio_core::reactor::{Core, Handle};
 
 #[derive(Clone)]
 struct CachedResponse {
@@ -42,8 +42,15 @@ struct TurboCrab {
     client: Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>,
     cache: Arc<RwLock<HashMap<Uri, CachedResponse>>>,
 }
-
 impl TurboCrab {
+    fn new(client_handle: &Handle) -> TurboCrab {
+        TurboCrab {
+            client: Client::configure()
+                .connector(hyper_tls::HttpsConnector::new(8, client_handle).unwrap())
+                .build(client_handle),
+            cache: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
     fn get_url(&self, url: Uri) -> Box<Future<Item = Response, Error = hyper::Error> + 'static> {
         let cache = self.cache.clone();
 
@@ -103,17 +110,12 @@ fn main() {
     let mut core = Core::new().unwrap();
     let handle = core.handle();
     let client_handle = core.handle();
-    let server_handle = handle.clone();
+    let server_handle = core.handle();
 
     let addr = "127.0.0.1:3000".parse().unwrap();
     let server = Http::new()
         .serve_addr_handle(&addr, &core.handle(), move || {
-            Ok(TurboCrab {
-                client: Client::configure()
-                    .connector(hyper_tls::HttpsConnector::new(8, &client_handle).unwrap())
-                    .build(&client_handle),
-                cache: Arc::new(RwLock::new(HashMap::new())),
-            })
+            Ok(TurboCrab::new(&client_handle))
         })
         .unwrap();
 
