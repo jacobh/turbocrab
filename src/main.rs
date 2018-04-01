@@ -8,17 +8,67 @@ extern crate tokio_core;
 extern crate url;
 
 use std::str::FromStr;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 use futures::prelude::*;
 
-use hyper::header::ContentLength;
 use hyper::{Client, Uri};
 use hyper::server::{Http, Request, Response, Service};
 
 use tokio_core::reactor::Core;
 
+#[derive(Clone)]
+struct CachedResponse {
+    status: hyper::StatusCode,
+    headers: hyper::Headers,
+    body: Vec<u8>,
+}
+impl Into<Response> for CachedResponse {
+    fn into(self) -> Response {
+        let CachedResponse {
+            status,
+            headers,
+            body,
+        } = self;
+        Response::new()
+            .with_status(status)
+            .with_headers(headers)
+            .with_body(body)
+    }
+}
+
 struct TurboCrab {
     client: Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>,
+    cache: Arc<RwLock<HashMap<Uri, CachedResponse>>>,
+}
+
+impl TurboCrab {
+    fn get_url(&self, url: Uri) -> Box<Future<Item = Response, Error = hyper::Error> + 'static> {
+        let cache = self.cache.clone();
+
+        if let Some(resp) = cache.read().unwrap().get(&url) {
+            return Box::new(futures::future::ok(resp.clone().into()));
+        }
+
+        Box::new(self.client.get(url.clone()).and_then(|resp| {
+            let status = resp.status();
+            let headers = resp.headers().clone();
+
+            resp.body()
+                .concat2()
+                .map(|chunk| chunk.to_vec())
+                .map(move |body: Vec<u8>| {
+                    let cached_response = CachedResponse {
+                        status: status,
+                        headers: headers,
+                        body: body,
+                    };
+                    cache.write().unwrap().insert(url, cached_response.clone());
+                    cached_response.into()
+                })
+        }))
+    }
 }
 
 impl Service for TurboCrab {
@@ -38,15 +88,14 @@ impl Service for TurboCrab {
         let s = format!("{:?}", source_url);
         println!("{}", s);
 
-        if let Some(source_url) = source_url {
-            Box::new(self.client.get(source_url))
-        } else {
-            Box::new(futures::future::ok(
-                Response::new()
-                    .with_header(ContentLength(s.len() as u64))
-                    .with_body(s),
-            ))
-        }
+        source_url.map_or_else(
+            || {
+                Box::new(futures::future::ok(
+                    Response::new().with_status(hyper::BadRequest),
+                )) as Box<Future<Item = Self::Response, Error = Self::Error>>
+            },
+            |source_url| self.get_url(source_url),
+        )
     }
 }
 
@@ -63,6 +112,7 @@ fn main() {
                 client: Client::configure()
                     .connector(hyper_tls::HttpsConnector::new(8, &client_handle).unwrap())
                     .build(&client_handle),
+                cache: Arc::new(RwLock::new(HashMap::new())),
             })
         })
         .unwrap();
