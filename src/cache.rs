@@ -1,6 +1,8 @@
+use base64;
 use bincode;
 use crossbeam_channel;
 use hyper::Uri;
+use ring;
 use sled::{ConfigBuilder, Tree};
 use std::sync::Arc;
 use std::thread;
@@ -14,7 +16,7 @@ pub struct TurboCache {
 impl TurboCache {
     pub fn new() -> TurboCache {
         let config = ConfigBuilder::new()
-            .path("cachedb")
+            .path("cache/db")
             .use_compression(false)
             .build();
 
@@ -48,4 +50,9 @@ impl TurboCache {
     pub fn append_async(&self, resp: CachedResponse) {
         self.cache_sender.send(resp).unwrap()
     }
+}
+
+pub fn url_to_cache_path(url: &Uri) -> String {
+    let url_hash = ring::digest::digest(&ring::digest::SHA256, url.to_string().as_bytes());
+    format!("cache/files/{}", base64::encode(url_hash.as_ref()))
 }

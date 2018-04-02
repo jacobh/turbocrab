@@ -4,8 +4,10 @@ extern crate crossbeam_channel;
 extern crate futures;
 extern crate hyper;
 extern crate hyper_tls;
+extern crate ring;
 #[macro_use]
 extern crate serde_derive;
+extern crate base64;
 extern crate sled;
 extern crate tokio_core;
 extern crate tokio_file_unix;
@@ -18,6 +20,8 @@ mod cached_response;
 use cache::TurboCache;
 use cached_response::CachedResponseBuilder;
 
+use std::fs::File;
+use std::io::Write;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -51,15 +55,22 @@ impl TurboCrab {
             return Box::new(futures::future::ok(resp.into_response(&handle)));
         }
 
-        Box::new(self.client.get(url.clone()).and_then(|resp| {
+        Box::new(self.client.get(url.clone()).and_then(move |resp| {
+            let cache_path = cache::url_to_cache_path(&url);
+
             let resp_builder =
                 CachedResponseBuilder::new(url, resp.status()).with_headers(resp.headers());
 
+            let mut f = File::create(cache_path).unwrap();
+
             resp.body()
-                .concat2()
-                .map(|chunk| chunk.to_vec())
-                .map(move |body: Vec<u8>| {
-                    let cached_response = resp_builder.with_body(body).build();
+                .for_each(move |chunk| {
+                    f.write(&chunk.to_vec())
+                        .map(|_| ())
+                        .map_err(|e| -> hyper::Error { e.into() })
+                })
+                .map(move |_| {
+                    let cached_response = resp_builder.build();
                     cache.append_async(cached_response.clone());
                     cached_response.into_response(&handle)
                 })
