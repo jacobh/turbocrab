@@ -1,36 +1,49 @@
 use std::thread;
-use evmap;
+use std::sync::Arc;
+use bincode;
 use crossbeam_channel;
 use hyper::Uri;
+use sled::{ConfigBuilder, Tree};
 
 use cached_response::CachedResponse;
 
 pub struct TurboCache {
-    cache_reader: evmap::ReadHandle<Uri, Box<CachedResponse>>,
+    tree: Arc<Tree>,
     cache_sender: crossbeam_channel::Sender<CachedResponse>,
 }
 impl TurboCache {
     pub fn new() -> TurboCache {
-        let (reader, mut writer) = evmap::new();
+        let config = ConfigBuilder::new()
+            .path("cachedb")
+            .use_compression(false)
+            .build();
+
+        let tree = Arc::new(Tree::start(config).unwrap());
+
         let (tx, rx) = crossbeam_channel::unbounded::<CachedResponse>();
 
+        let tree2 = tree.clone();
         thread::spawn(move || {
             for cached_response in rx.iter() {
-                writer.insert(
-                    cached_response.url(),
-                    Box::new(cached_response),
-                );
-                writer.refresh();
+                tree2
+                    .set(
+                        cached_response.url().to_string().as_bytes().to_vec(),
+                        bincode::serialize(&cached_response).unwrap(),
+                    )
+                    .unwrap();
             }
         });
 
         TurboCache {
-            cache_reader: reader,
+            tree: tree,
             cache_sender: tx,
         }
     }
     pub fn get(&self, url: &Uri) -> Option<CachedResponse> {
-        self.cache_reader.get_and(url, |resps| *(resps[0].clone()))
+        self.tree
+            .get(url.to_string().as_bytes())
+            .unwrap()
+            .map(|resp_bytes| bincode::deserialize(&resp_bytes).unwrap())
     }
     pub fn append_async(&self, resp: CachedResponse) {
         self.cache_sender.send(resp).unwrap()

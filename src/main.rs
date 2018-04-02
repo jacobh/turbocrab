@@ -1,13 +1,14 @@
 #![feature(conservative_impl_trait)]
 
 // extern crate failure;
+extern crate bincode;
 extern crate crossbeam_channel;
-extern crate evmap;
 extern crate futures;
 extern crate hyper;
 extern crate hyper_tls;
 #[macro_use]
 extern crate serde_derive;
+extern crate sled;
 extern crate tokio_core;
 extern crate url;
 
@@ -15,7 +16,7 @@ mod cache;
 mod cached_response;
 
 use cache::TurboCache;
-use cached_response::{CachedResponseBuilder};
+use cached_response::CachedResponseBuilder;
 
 use std::str::FromStr;
 use std::sync::Arc;
