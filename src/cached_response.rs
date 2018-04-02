@@ -1,6 +1,12 @@
-use std::collections::HashMap;
+use futures::prelude::*;
 use hyper;
-use hyper::{Headers, Response, Uri};
+use hyper::{Body, Chunk, Headers, Response, Uri};
+use std::collections::HashMap;
+use std::fs::File;
+use tokio_core::reactor::Handle;
+use tokio_file_unix;
+use tokio_io::AsyncRead;
+use tokio_io::codec::BytesCodec;
 
 pub struct CachedResponseBuilder {
     url: hyper::Uri,
@@ -69,11 +75,27 @@ impl CachedResponse {
     pub fn url(&self) -> Uri {
         self.url.parse().unwrap()
     }
-}
-impl Into<Response> for CachedResponse {
-    fn into(self) -> Response {
-        let headers = self.headers();
-        let CachedResponse { status, body, .. } = self;
+    pub fn into_response(self, handle: &Handle) -> Response {
+        let mut headers = self.headers();
+        let CachedResponse { status, .. } = self;
+
+        // TEMPORARY HACK
+        let f = File::open("Cargo.toml").unwrap();
+        let f_length = f.metadata().unwrap().len();
+        let chunks_stream = tokio_file_unix::File::new_nb(f)
+            .unwrap()
+            .into_io(handle)
+            .unwrap()
+            .framed(BytesCodec::new())
+            .map(|bytes| -> Result<Chunk, hyper::Error> { Ok(Chunk::from(bytes.freeze())) })
+            .map_err(|_| unreachable!());
+
+        let (sender, body) = Body::pair();
+
+        handle.spawn(sender.send_all(chunks_stream).map(|_| ()).map_err(|_| ()));
+
+        // TEMPORARY HACK
+        headers.set(hyper::header::ContentLength(f_length));
 
         Response::new()
             .with_status(hyper::StatusCode::try_from(status).unwrap())

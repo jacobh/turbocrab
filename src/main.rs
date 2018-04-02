@@ -10,6 +10,8 @@ extern crate hyper_tls;
 extern crate serde_derive;
 extern crate sled;
 extern crate tokio_core;
+extern crate tokio_file_unix;
+extern crate tokio_io;
 extern crate url;
 
 mod cache;
@@ -23,29 +25,32 @@ use std::sync::Arc;
 
 use futures::prelude::*;
 
-use hyper::{Client, Uri};
 use hyper::server::{Http, Request, Response, Service};
+use hyper::{Client, Uri};
 
 use tokio_core::reactor::{Core, Handle};
 
 struct TurboCrab {
+    handle: Handle,
     client: Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>,
     cache: Arc<TurboCache>,
 }
 impl TurboCrab {
-    fn new(client_handle: &Handle) -> TurboCrab {
+    fn new(handle: &Handle) -> TurboCrab {
         TurboCrab {
+            handle: handle.clone(),
             client: Client::configure()
-                .connector(hyper_tls::HttpsConnector::new(8, client_handle).unwrap())
-                .build(client_handle),
+                .connector(hyper_tls::HttpsConnector::new(8, handle).unwrap())
+                .build(handle),
             cache: Arc::new(TurboCache::new()),
         }
     }
     fn get_url(&self, url: Uri) -> Box<Future<Item = Response, Error = hyper::Error> + 'static> {
         let cache = self.cache.clone();
+        let handle = self.handle.clone();
 
         if let Some(resp) = cache.get(&url) {
-            return Box::new(futures::future::ok(resp.into()));
+            return Box::new(futures::future::ok(resp.into_response(&handle)));
         }
 
         Box::new(self.client.get(url.clone()).and_then(|resp| {
@@ -58,7 +63,7 @@ impl TurboCrab {
                 .map(move |body: Vec<u8>| {
                     let cached_response = resp_builder.with_body(body).build();
                     cache.append_async(cached_response.clone());
-                    cached_response.into()
+                    cached_response.into_response(&handle)
                 })
         }))
     }
