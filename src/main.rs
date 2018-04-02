@@ -11,126 +11,21 @@ extern crate serde_derive;
 extern crate tokio_core;
 extern crate url;
 
+mod cache;
+mod cached_response;
+
+use cache::TurboCache;
+use cached_response::{CachedResponseBuilder};
+
 use std::str::FromStr;
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::thread;
 
 use futures::prelude::*;
 
-use hyper::{Client, Headers, Uri};
+use hyper::{Client, Uri};
 use hyper::server::{Http, Request, Response, Service};
 
 use tokio_core::reactor::{Core, Handle};
-
-struct CachedResponseBuilder {
-    url: hyper::Uri,
-    status: hyper::StatusCode,
-    headers: HashMap<String, Vec<Vec<u8>>>,
-    body: Vec<u8>,
-}
-impl CachedResponseBuilder {
-    fn new(url: hyper::Uri, status: hyper::StatusCode) -> CachedResponseBuilder {
-        CachedResponseBuilder {
-            url: url,
-            status: status,
-            headers: HashMap::new(),
-            body: Vec::new(),
-        }
-    }
-    fn with_body(mut self, body: Vec<u8>) -> CachedResponseBuilder {
-        self.body = body;
-        self
-    }
-    fn with_headers(mut self, headers: &Headers) -> CachedResponseBuilder {
-        self.headers = {
-            headers
-                .iter()
-                .map(|header_item| {
-                    (
-                        header_item.name().to_string(),
-                        header_item
-                            .raw()
-                            .iter()
-                            .map(|raw_val| raw_val.to_vec())
-                            .collect(),
-                    )
-                })
-                .collect()
-        };
-        self
-    }
-    fn build(self) -> CachedResponse {
-        CachedResponse {
-            url: self.url.to_string(),
-            status: self.status.as_u16(),
-            headers: self.headers,
-            body: self.body,
-        }
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct CachedResponse {
-    url: String,
-    status: u16,
-    headers: HashMap<String, Vec<Vec<u8>>>,
-    body: Vec<u8>,
-}
-impl CachedResponse {
-    fn headers(&self) -> Headers {
-        let mut h = Headers::with_capacity(10);
-        for (k, vs) in self.headers.clone() {
-            for v in vs {
-                h.append_raw(k.clone(), v);
-            }
-        }
-        h
-    }
-}
-impl Into<Response> for CachedResponse {
-    fn into(self) -> Response {
-        let headers = self.headers();
-        let CachedResponse { status, body, .. } = self;
-
-        Response::new()
-            .with_status(hyper::StatusCode::try_from(status).unwrap())
-            .with_headers(headers)
-            .with_body(body)
-    }
-}
-
-struct TurboCache {
-    cache_reader: evmap::ReadHandle<Uri, Box<CachedResponse>>,
-    cache_sender: crossbeam_channel::Sender<CachedResponse>,
-}
-impl TurboCache {
-    fn new() -> TurboCache {
-        let (reader, mut writer) = evmap::new();
-        let (tx, rx) = crossbeam_channel::unbounded::<CachedResponse>();
-
-        thread::spawn(move || {
-            for cached_response in rx.iter() {
-                writer.insert(
-                    cached_response.url.parse().unwrap(),
-                    Box::new(cached_response),
-                );
-                writer.refresh();
-            }
-        });
-
-        TurboCache {
-            cache_reader: reader,
-            cache_sender: tx,
-        }
-    }
-    fn get(&self, url: &Uri) -> Option<CachedResponse> {
-        self.cache_reader.get_and(url, |resps| *(resps[0].clone()))
-    }
-    fn append_async(&self, resp: CachedResponse) {
-        self.cache_sender.send(resp).unwrap()
-    }
-}
 
 struct TurboCrab {
     client: Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>,
