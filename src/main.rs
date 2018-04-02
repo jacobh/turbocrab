@@ -6,6 +6,8 @@ extern crate evmap;
 extern crate futures;
 extern crate hyper;
 extern crate hyper_tls;
+#[macro_use]
+extern crate serde_derive;
 extern crate tokio_core;
 extern crate url;
 
@@ -60,18 +62,18 @@ impl CachedResponseBuilder {
     }
     fn build(self) -> CachedResponse {
         CachedResponse {
-            url: self.url,
-            status: self.status,
+            url: self.url.to_string(),
+            status: self.status.as_u16(),
             headers: self.headers,
             body: self.body,
         }
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct CachedResponse {
-    url: hyper::Uri,
-    status: hyper::StatusCode,
+    url: String,
+    status: u16,
     headers: HashMap<String, Vec<Vec<u8>>>,
     body: Vec<u8>,
 }
@@ -92,7 +94,7 @@ impl Into<Response> for CachedResponse {
         let CachedResponse { status, body, .. } = self;
 
         Response::new()
-            .with_status(status)
+            .with_status(hyper::StatusCode::try_from(status).unwrap())
             .with_headers(headers)
             .with_body(body)
     }
@@ -109,7 +111,10 @@ impl TurboCache {
 
         thread::spawn(move || {
             for cached_response in rx.iter() {
-                writer.insert(cached_response.url.clone(), Box::new(cached_response));
+                writer.insert(
+                    cached_response.url.parse().unwrap(),
+                    Box::new(cached_response),
+                );
                 writer.refresh();
             }
         });
