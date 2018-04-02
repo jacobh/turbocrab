@@ -1,5 +1,3 @@
-#![feature(conservative_impl_trait)]
-
 // extern crate failure;
 extern crate bincode;
 extern crate crossbeam_channel;

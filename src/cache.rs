@@ -1,9 +1,9 @@
-use std::thread;
-use std::sync::Arc;
 use bincode;
 use crossbeam_channel;
 use hyper::Uri;
 use sled::{ConfigBuilder, Tree};
+use std::sync::Arc;
+use std::thread;
 
 use cached_response::CachedResponse;
 
